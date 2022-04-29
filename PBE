@@ -1,0 +1,38 @@
+##批量读取+合并Excel文件，每个带多个Sheet
+files = list.files("datas/read_datas", pattern = "xlsx", 
+                   full.names = TRUE, recursive = TRUE)
+files
+readPath = function(path) {
+  map_dfr(excel_sheets(path), ~ read_xlsx(path, sheet = .x))
+}
+df = map_dfr(files, readPath)
+df
+# 合并一个excel中不同sheet
+path = "rawdata/SP30-summary.xlsx"
+# excel_sheets(path)
+df <- map_dfr(excel_sheets(path), ~ read_xlsx(path, sheet = .x))  
+df
+#########################################
+df %>% 
+  group_by(Batches, Product) %>% 
+  slice(1) 
+distinct(df,Batches,Container) #去重复行
+
+#######################################################################
+sp<- read_excel("rawdata/GW012-valve-select.xlsx",sheet="sp") 
+sp
+library(sjmisc)
+df=sp %>% select(1:2,5:6) %>% 
+  mutate(
+    formulation=rec(Canister_Batch, 
+                    rec = "W21111203=R; 
+                           W21111204=T;
+                           else=NA",
+                    append = FALSE))
+df  
+names(df) <- c("Batches", "Container", "Stage","Value", "Product")
+df=df %>% dplyr::filter(Product=="R" | Product=="T")
+df
+#"Batches", "Container", "Stage","Value", "Product")
+source("script/PBE_analysis.R")
+PBE_analysis(df)
