@@ -1,0 +1,187 @@
+rm(list=ls())
+
+library(randomForest)
+x.historical <- read_excel("datas/all.data.xlsx",sheet="historical.data")
+x.historical
+# 响应变量 ton.dmm 和 ton.mf
+df=x.historical %>% pivot_longer(9:10, names_to = "Respones", values_to = "y") 
+df
+form=formula(paste("y","~",paste(colnames(df)[2:8], collapse="+")))
+form
+df.nest=df %>% 
+  group_nest(Respones) %>% 
+  mutate(
+    model=map(data, ~randomForest(form, data = .x)), #随机森林
+    pred=map(model, ~predict(.x)),
+    R2=map2(data, pred, ~round(cor(.y, .x$y)^2,3))
+  ) %>% unnest(R2)
+df.nest
+##绘制多个Y的拟合图
+for (i in (1:length(df.nest$Respones)) )   {
+plot(df.nest$pred[[i]], df.nest$data[[i]]$y, #type="n",
+       xlab="predicted", ylab="observed",
+       main=paste("Respones=",df.nest$Respones[i]))
+abline(0,1,col="red")    # diagonal in red
+abline(lm(df.nest$data[[i]]$y ~ df.nest$pred[[i]])$coef,lty=2) # linear fit in black
+legend("topleft",legend=substitute(R^2 == a, list(a=df.nest$R2[i])))# linear fit in black
+grid()
+}
+
+####################################################################
+x.pred <- expand_grid(
+  m.kat = seq(min(x.historical$m.kat,na.rm=T), 
+              max(x.historical$m.kat,na.rm=T), length=15),
+  m.add = seq(min(x.historical$m.add), 
+              max(x.historical$m.add), length=15),
+  p.co2 = seq(min(x.historical$p.co2), 
+              max(x.historical$p.co2), length=3),
+  T     = seq(min(x.historical$T), 
+              max(x.historical$T), length=3),
+  t.h   = median(x.historical$t.h),
+  p.h2  = median(x.historical$p.h2),
+  v.ml  = median(x.historical$v.ml)) 
+x.pred
+# x.pred %>% summarise(across(everything(),range))
+sapply(x.pred, range)
+x.pred= x.pred %>% mutate(
+  map_dfc(df.nest$model, ~predict(.x, x.pred))
+) 
+x.pred
+# x.pred$y1 <- predict(df.nest$model[[1]], x.pred)
+library(lattice)
+cex.set=0.7
+wireframe(...1 ~ m.kat*m.add|p.co2*T, data=x.pred,
+          zlab=list(label="dmm",cex=cex.set,rot=90),
+          xlab=list(label="m.kat",cex=cex.set,rot=0),
+          ylab=list(label="m.add",cex=cex.set,rot=0),
+          drape=TRUE,      
+          at=do.breaks(c(50,600),100),
+          col.regions = pals::parula(100),
+          strip=TRUE, pretty=TRUE,
+          scales = list(arrows = FALSE,
+                        x=c(cex=cex.set),y=c(cex=cex.set),z=list(cex=cex.set)),
+          screen = list(z = 300, x = -60, y=0),
+          par.strip.text=list(cex=cex.set)
+)
+
+x.promising=x.historical %>% filter(ton.dmm>400) %>%
+            select(-starts_with("ton"), -obsnr) %>% distinct()
+x.promising
+sapply(x.promising,range) # summarise(across(1:7, range))
+candidate <- expand_grid(
+  m.kat=seq(min(x.promising$m.kat),  
+            max(x.promising$m.kat),length=3),
+  v.ml=seq(min(x.promising$v.ml),  
+           max(x.promising$v.ml),length=3),
+  m.add=seq(min(x.promising$m.add),  
+            max(x.promising$m.add),length=3))
+candidate  <- rbind(x.promising[,1:3],candidate) 
+candidate
+library(AlgDesign)
+doe.cat <- optFederov(~ (m.kat + v.ml + m.add)^2+
+                        I(m.kat^2) + I(v.ml^2) + I(m.add^2),
+                      data=as.data.frame(candidate),center=T,augment=T,rows=(1:9),
+                      criterion="D", nTrials=15)$design 
+doe.cat
+# rownames(doe.cat)=NULL
+kappa(model.matrix(~ (m.kat + v.ml + m.add)^2 + 
+                     I(m.kat^2) + I(v.ml^2) + I(m.add^2) , 
+                     data=data.frame(scale(doe.cat))))
+
+
+##########################doe1
+# data %>%
+#   mutate(rmse = rmse(model, data),
+#          rsq = rsquare(model, data),
+#          slope = coef(model)[[2]],
+#          pval = glance(model)$p.value)
+doe1 <- read_excel("datas/all.data.xlsx", sheet="DoE1")
+doe1
+sapply(doe1,range)
+df=doe1 %>% pivot_longer(9:10, names_to = "Respones", values_to = "y") 
+df
+form <- formula(
+  paste("y","~ (m.kat + v.ml + m.add)^2 + I(m.kat^2) + I(v.ml^2) + I(m.add^2)",
+           sep=""))
+form
+df.nest=df %>% 
+  group_nest(Respones) %>% 
+  mutate(
+    model=map(data, ~MASS::stepAIC(lm(form, data = .x)),trace=0,k=log(nrow(.x))),
+    pred=map(model, ~predict(.x)),
+    tidy=map(model, ~broom::glance(.x)),
+    R2=map2(data, pred, ~round(cor(.y, .x$y)^2,3))
+    )%>% unnest(R2)
+df.nest
+df.nest$model %>% map(anova) 
+#
+df.nest %>% unnest(c(data ,pred)) %>% 
+  qplot(data=., x=pred,y=y, facets = ~Respones)+
+  geom_abline(intercept = 0, slope = 1, color="red")+
+  geom_smooth(method = 'lm',formula= 'y ~ x',se=FALSE, linetype="dashed",color="black")
+#
+x.pred <- expand_grid(m.kat = seq(min(doe1$m.kat), 
+                                  max(doe1$m.kat), length=15),
+                      m.add = seq(min(doe1$m.add), 
+                                  max(doe1$m.add), length=15),
+                      v.ml  = seq(min(doe1$v.ml), 
+                                  max(doe1$v.ml), length=3))
+x.pred= x.pred %>% mutate(
+         map_dfc(df.nest$model, ~predict(.x, x.pred))
+          ) 
+x.pred
+library(lattice)
+cex.set=0.7
+wireframe(...1 ~ m.kat*m.add|v.ml, data=x.pred,
+          zlab=list(label="y",cex=cex.set,rot=90),
+          xlab=list(label="m.kat",cex=cex.set,rot=0),
+          ylab=list(label="m.add",cex=cex.set,rot=0),
+          drape=TRUE, strip=TRUE,  pretty=TRUE,  
+          at=do.breaks(c(100,1200),100),
+          col.regions = pals::parula(100),
+          scales = list(arrows = FALSE,
+                        x=c(cex=cex.set),y=c(cex=cex.set),z=list(cex=cex.set)),
+          screen = list(z = 300, x = -60, y=0),
+          par.strip.text=list(cex=cex.set)
+)
+
+##################################################
+doe1
+x0=doe1 %>% summarise(across(2:4,  #选择x变量
+  list(x.mean=mean,x.lb=min,x.ub=max),.names = "{.col}_{.fn}")) %>% 
+  pivot_longer(everything(), names_to = c("x.var",".value"),names_sep = "_")
+x0
+
+###########
+opt.relax=function(k=0, n=1){
+  pars.set=x0 %>% 
+    mutate(delta=map2_dbl(x.lb,x.ub, ~(.y-.x)/n)) %>%  # stepsize 10% of initial design
+    mutate(
+      xx.lb=map2_dbl(x.lb,delta, ~.x-k*.y),
+      xx.ub=map2_dbl(x.ub,delta, ~.x+k*.y)
+    ) 
+  pars.set=as.data.frame(pars.set)
+#f1
+  objective   =function(x) {
+    xx               <- data.frame(rbind(x))
+    colnames(xx)     <- pars.set$x.var
+    return( -predict(df.nest$model[[1]],xx))#note: -obj <=> max(obj)  min(-x)=max(x)
+  }
+
+  library(Rsolnp)
+  res.nlp=solnp(fun=objective,
+                pars=pars.set$x.mean,
+                LB=pars.set$xx.lb, UB=pars.set$xx.ub, control=list(trace=0)) 
+  x.pars=round(res.nlp$pars,3)
+  x.solution=data.frame(rbind(x.pars)) #2
+  rownames(x.solution)=NULL
+  colnames(x.solution)=pars.set$x.var
+  x.solution$relax.step=k*1/n*100  #百分多少
+  ######
+  return(x.solution)
+}
+opt.relax(k=0, n=4)
+########
+x.sol=map_df(1:3, ~opt.relax(k=.x, n=10)) #迭代3次, 每次10%
+x.sol
+x.sol %>% mutate(map_dfc(df.nest$model, ~predict(.x, x.sol))) 
