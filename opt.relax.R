@@ -1,4 +1,5 @@
 ####################################################
+##data 为x变量的数据， x.col为x变量在数据中哪几列，obj_model 目标函数如y1的最大值，k迭代次数，n为 步长：10 40
 opt.relax=function(data, x.col, obj_model, k=0, n=1){
   x0=data %>% summarise(across(all_of(x.col),  #选择x变量
                                list(x.mean=mean, x.lb=min, x.ub=max),
@@ -33,7 +34,7 @@ opt.relax=function(data, x.col, obj_model, k=0, n=1){
   x.solution=data.frame(rbind(x.pars)) #2
   rownames(x.solution)=NULL
   colnames(x.solution)=pars.set$x.var
-  x.solution$relax.step=k*1/n*100  #百分多少
+  x.solution$relax.step=k*1/n*100  #百分比多少
   x.solution$t.min=round(tt[3]/60,2) 
   x.solution$return.code=res.nlp$convergence
   ######
