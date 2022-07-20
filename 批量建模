@@ -2,11 +2,11 @@ rm(list=ls())
 library(randomForest)
 dat <- read_excel("datas/all.data.xlsx",sheet="historical.data")
 dat
-x.col=2:8
+
 # 响应变量 ton.dmm 和 ton.mf
 df=dat %>% pivot_longer(9:10, names_to = "Respones", values_to = "y") 
 df
-form=formula(paste("y","~",paste(colnames(dat[,x.col]), collapse="+")))
+form=formula(paste("y","~",paste(colnames(dat[,2:8]), collapse="+")))
 form
 df.nest=df %>% 
   group_nest(Respones) %>% 
@@ -98,7 +98,7 @@ kappa(model.matrix(~ (m.kat + v.ml + m.add)^2 +
                      data=data.frame(scale(doe.cat))))
 
 
-##########################doe1
+###############     doe1    ########################################
 # data %>%
 #   mutate(rmse = rmse(model, data),
 #          rsq = rsquare(model, data),
@@ -161,8 +161,8 @@ wireframe(y1 ~ m.kat*m.add|v.ml, data=x.pred,
 )
 x.pred %>% distinct(v.ml)
 ##################################################
-x.col=2:4  #x.var
-x0=doe1 %>% summarise(across(all_of(x.col),  #选择x变量
+
+x0=doe1 %>% summarise(across(all_of(2:4),  #选择x变量
   list(x.mean=mean,x.lb=min,x.ub=max),.names = "{.col}_{.fn}")) %>% 
   pivot_longer(everything(), names_to = c("x.var",".value"),names_sep = "_")
 x0
@@ -216,12 +216,11 @@ opt.relax=function(data, x.col, obj_model, k=0, n=1){
 }
 
 obj1=df.nest$model[[1]]  #目标优化最大y1
-
 #测试一次
-opt.relax(doe1, x.name, obj1,k=1, n=10)
+opt.relax(doe1, x.col=2:4, obj1,k=1, n=10)
 
 ########
-x.solution=map_df(1:3, ~opt.relax(doe1, x.name, obj1, k=.x, n=10)) #迭代3次, 每次10%
+x.solution=map_df(1:3, ~opt.relax(doe1, x.col=2:4, obj1, k=.x, n=10)) #迭代3次, 每次10%
 x.solution
 df.collect=x.solution %>% 
            mutate(map_dfc(df.nest$model, ~predict(.x, x.solution))) %>% 
@@ -230,7 +229,7 @@ df.collect
 sapply(doe1, range)
 
 
-############################################doe2
+###### doe2 #############################################################
 library(AlgDesign)
 ## full factorial candidate set
 candidate <- expand.grid(T=seq(80,100, length=2),
@@ -304,11 +303,9 @@ wireframe(y1 ~ T*p.h2|p.co2*t.h, data=x.pred,
 )
 
 ########
-doe2
-x.col=5:8
 source("script/opt.relax.R")
 x0=doe2 %>% 
-  summarise(across(all_of(x.col), list(x.mean=mean,x.lb=min,x.ub=max), 
+  summarise(across(all_of(5:8), list(x.mean=mean,x.lb=min,x.ub=max), 
                    .names = "{.col}_{.fn}")) %>% 
   pivot_longer(everything(), names_to = c("x.var",".value"),names_sep = "_") 
 x0
@@ -322,7 +319,7 @@ pars.set=x0 %>%
 pars.set
 
 obj1=df.nest$model[[1]]
-x.solution=map_df(0:2, ~opt.relax(doe2, x.col, obj1, k=.x, n=4)) #迭代3次, 每次10%
+x.solution=map_df(0:2, ~opt.relax(doe2, x.col=5:8, obj1, k=.x, n=4)) #迭代3次, 每次10%
 x.solution
 df.collect=x.solution %>% 
   mutate(map_dfc(df.nest$model, ~predict(.x, x.solution))) %>% 
