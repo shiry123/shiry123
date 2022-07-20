@@ -1,5 +1,4 @@
 rm(list=ls())
-
 library(randomForest)
 dat <- read_excel("datas/all.data.xlsx",sheet="historical.data")
 dat
@@ -49,15 +48,17 @@ x.pred <- expand_grid(
 x.pred
 # x.pred %>% summarise(across(everything(),range))
 sapply(x.pred, range)
-x.pred= x.pred %>% mutate(
-  map_dfc(df.nest$model, ~predict(.x, x.pred))
-) 
-x.pred
 # x.pred$y1 <- predict(df.nest$model[[1]], x.pred)
+# x.pred$y2 <- predict(df.nest$model[[2]], x.pred)
+x.pred=x.pred %>% 
+  mutate(map_dfc(df.nest$model, ~predict(.x, x.pred))) %>% 
+  rename_with(~gsub("...", "y", .x, fixed = TRUE), num_range("...",1:2))
+x.pred
+
 library(lattice)
 cex.set=0.7
-wireframe(...1 ~ m.kat*m.add|p.co2*T, data=x.pred,
-          zlab=list(label="dmm",cex=cex.set,rot=90),
+wireframe(y1 ~ m.kat*m.add|p.co2*T, data=x.pred,
+          zlab=list(label="y",cex=cex.set,rot=90),
           xlab=list(label="m.kat",cex=cex.set,rot=0),
           ylab=list(label="m.add",cex=cex.set,rot=0),
           drape=TRUE,      
@@ -69,7 +70,7 @@ wireframe(...1 ~ m.kat*m.add|p.co2*T, data=x.pred,
           screen = list(z = 300, x = -60, y=0),
           par.strip.text=list(cex=cex.set)
 )
-dat
+
 x.promising=dat %>% dplyr::filter(ton.dmm > 400) %>% 
   dplyr::select(-starts_with("ton."), -obsnr) %>% distinct()
 x.promising
@@ -119,7 +120,7 @@ df.nest=df %>%
     pred=map(model, ~predict(.x)),
     tidy=map(model, ~broom::glance(.x)),
     R2=map2(data, pred, ~round(cor(.y, .x$y)^2,3))
-    )%>% unnest(R2)
+    ) %>% unnest(R2)
 df.nest
 df.nest$model %>% map(anova) 
 #
@@ -135,26 +136,25 @@ x.pred <- expand_grid(m.kat = seq(min(doe1$m.kat),
                                   max(doe1$m.add), length=15),
                       v.ml  = seq(min(doe1$v.ml), 
                                   max(doe1$v.ml), length=3))
-x.pred= x.pred %>% mutate(
-         map_dfc(df.nest$model, ~predict(.x, x.pred))
-          ) 
+x.pred=x.pred %>% 
+  mutate(map_dfc(df.nest$model, ~predict(.x, x.pred))) %>% 
+  rename_with(~gsub("...", "y", .x, fixed = TRUE), num_range("...",1:2))
 x.pred
-str(x.pred)
 library(lattice)
 cex.set=0.7
-wireframe(...1 ~ m.kat*m.add|v.ml, data=x.pred,
+wireframe(y1 ~ m.kat*m.add|v.ml, data=x.pred,
           zlab=list(label="y",cex=cex.set,rot=90),
           xlab=list(label="m.kat",cex=cex.set,rot=0),
           ylab=list(label="m.add",cex=cex.set,rot=0),
           drape=TRUE, strip=TRUE,  pretty=TRUE,  
-          at=do.breaks(c(100,1200),100),
+          # at=do.breaks(c(100,1200),100),
           col.regions = pals::parula(100),
           scales = list(arrows = FALSE,
                         x=c(cex=cex.set),y=c(cex=cex.set),z=list(cex=cex.set)),
           screen = list(z = 300, x = -60, y=0),
           par.strip.text=list(cex=cex.set)
 )
-
+x.pred %>% distinct(v.ml)
 ##################################################
 x0=doe1 %>% summarise(across(contains(x.name),  #选择x变量
   list(x.mean=mean,x.lb=min,x.ub=max),.names = "{.col}_{.fn}")) %>% 
@@ -188,7 +188,8 @@ opt.relax=function(data,x.name,obj_model, k=0, n=1){
   }
   
   library(Rsolnp)
-  res.nlp=gosolnp(fun=minus.obj, #pars=pars.set$x.mean,
+  #函数 gosolnp()
+  res.nlp=solnp(fun=minus.obj, pars=pars.set$x.mean,
                   LB=pars.set$xx.lb, UB=pars.set$xx.ub) 
   tt <- system.time(res.nlp)
   x.pars=round(res.nlp$pars,3)
@@ -206,5 +207,8 @@ opt.relax(doe1, x.name, obj1,k=1, n=10)
 
 ########
 x.solution=map_df(1:3, ~opt.relax(doe1, x.name, obj1, k=.x, n=10)) #迭代3次, 每次10%
-x.solution %>% mutate(map_dfc(df.nest$model, ~predict(.x, x.solution))) 
+x.solution
+x.solution %>% mutate(map_dfc(df.nest$model, ~predict(.x, x.solution))) %>% 
+  rename_with(~gsub("...", "y.pred", .x, fixed = TRUE), 
+               num_range("...",1:length(df.nest$model)))
 
