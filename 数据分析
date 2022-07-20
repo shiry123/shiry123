@@ -728,4 +728,133 @@ df$id <- 1:nrow(df)
 design2 <- factorial_design(df, dv = len, wid = id, between = c(supp, dose))
 design2
 
+#########################################################################################
+library(bruceR)
+library(rstatix)
+df=import("rawdata/GW012-SP-force.xlsx") %>% tibble()
+df
+df=df %>% unite("canister",c(Batch,ID), sep="-", remove = F) 
+
+df %>% group_by(sample, force) %>% 
+  get_summary_stats(Area_mm2,type = "mean_sd")
+
+qplot(data=df %>% filter(Area_mm2 > 250), 
+      x=force, y=Area_mm2, color=Actuator, facets = ~sample)+
+  stat_boxplot(geom = "errorbar",width=0.5)+
+  geom_boxplot()+
+  geom_point()+
+  theme_modern()
+
+df %>% group_by(sample) %>% t_test(Area_mm2 ~ force)
+
+df %>% anova_test(Area_mm2 ~ sample*force) 
+df %>% tukey_hsd(Area_mm2 ~ sample*force) %>% filter(p.adj.signif != "ns")
+
+fit=lm(data=df, logOD260~logc)
+library(ggfortify)
+autoplot(fit,which = c(1:3,6))
+
+
+library(tidytext)
+p1=ggplot(mtcars,aes(reorder_within(carb,mpg,list(vs,am)),mpg))+
+  geom_boxplot()
+p1
+## Mean+SD
+data(Cars93, package="MASS")
+str(Cars93)
+library(ggpubr)
+p2=ggplot(Cars93, 
+       aes(x = Origin, y = Weight, fill = Type )) +
+  geom_bar(stat = "summary", fun = "mean", colour = "black",
+           position = position_dodge()) +
+  stat_summary(fun.data = 'mean_sd',geom = "errorbar", colour = "black",
+               width = 0.25, position = position_dodge(0.9))
+  theme_bw()
+p2
+plot_grid(p1, p2, labels = c("A", "B"))
+##############################################################3
+df <- data.frame(
+  x = 1:10, y1 = 1:10, y2 = (1:10)^2, y3 = (1:10)^3, y4 = (1:10)^4
+)
+
+p1 <- ggplot(df, aes(x, y1)) + geom_point()
+p2 <- ggplot(df, aes(x, y2)) + geom_point()
+p3 <- ggplot(df, aes(x, y3)) + geom_point()
+p4 <- ggplot(df, aes(x, y4)) + geom_point()
+p5 <- ggplot(mpg, aes(as.factor(year), hwy)) +
+  geom_boxplot() +
+  facet_wrap(~class, scales = "free_y")
+# simple grid
+plot_grid(p1, p2, p3, p4)
+plot_grid(p1, p2, p3, p4, labels = c('A', 'B', 'C', 'D'))
+
+library(patchwork)
+p1 + p2 + p3 + p4 + plot_annotation(tag_levels = 'A')
+
+#################################################################
+data(Cars93, package="MASS")
+cars_lm <- lm(Price ~ (Passengers+Length+RPM)^2, data = Cars93)
+library(ggfortify)
+autoplot(cars_lm,which = c(1:3,6))
+car::vif(cars_lm) #共线性
+step(cars_lm, direction = "backward", trace = 0)
+cars_lm2 <- lm(Price ~ Passengers + Length + RPM + Passengers:RPM + 
+                Length:RPM, data = Cars93)
+check_model(cars_lm2) #Plots 窗口需要很大
+summary(cars_lm2)
+anova(cars_lm2)
+confint(cars_lm2)
+coef(cars_lm2)
+broom::tidy(cars_lm2)
+broom::glance(cars_lm2)
+broom::augment(cars_lm2)
+#########################################################
+library(ggplot2)
+library(latex2exp)
+library(equatiomatic)
+m <- lm(body_mass_g ~ bill_length_mm, penguins)
+extract_eq(m, use_coefs = TRUE)
+ggplot(penguins, aes(x = bill_length_mm, y = body_mass_g)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+m_eq <- extract_eq(m, use_coef = TRUE, ital_vars = TRUE)
+m_eq
+prep_eq <- gsub("\\\\_", "-", m_eq)
+prep_eq <- paste("$", as.character(prep_eq), "$", sep = "")
+prep_eq
+ggplot(penguins, aes(x = bill_length_mm, y = body_mass_g)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(
+    title = "Relation between bill length and body mass",
+    subtitle = TeX(prep_eq)
+  )
+#####################################################
+library("afex")
+data(obk.long, package = "afex")
+obk.long
+obk_anova <- aov_car(value ~ treatment * gender + Error(id/(phase*hour)), 
+                     data = obk.long)
+summary(obk_anova)
+afex_plot(obk_anova, ~treatment, ~gender)
+emmeans(obk_anova, pairwise~treatment|gender)$contrasts
+
+#################################################################
+sp<- read_excel("rawdata/GW012-RLD-sp30-lbw.xlsx",sheet=1) %>% make_clean_names()
+colnames(sp)
+sp=sp %>% select(1:6) %>% 
+  mutate(
+   test.date=lubridate::as_date(Actuation.Date)) %>% 
+  separate(Canister,c("sample","used.act"), sep="#") %>% 
+  convert_as_factor(test.date)
+sp
+sp %>% group_by(test.date, sample) %>% 
+  get_summary_stats(Area..mm.2., type = "mean_sd")
+
+qplot(data=sp, x=Actuation.Number, y=Area..mm.2., 
+      color=test.date, facets = sample~.)+
+  geom_smooth(method = 'lm', formula=y ~ x)
+
+qplot(data=sp, x=sample, y=Area..mm.2., 
+      color=test.date, geom="boxplot")
 
