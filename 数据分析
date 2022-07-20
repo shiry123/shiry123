@@ -1,0 +1,731 @@
+getwd()
+sp<- read_excel("rawdata/GW012-valve-select.xlsx",sheet="sp") 
+sp
+summary(sp)
+sp %>% summarise_all(~ sum(is.na(.)))
+sp=sp %>% drop_na() %>%
+mutate(
+lifestage=RECODE(act,"lo:60='B'; 61:100='M'; else=NA"),
+test.date=lubridate::as_date(Actuation_Date),
+formulation=map_chr(Canister_Batch, ~if_else(str_sub(.x,1,1)=="A","RLD","CF")),
+valve=RECODE(Canister_Batch,
+             "c('AFS62A','W21111203')='Teva'; 
+             'W21111204'='Bespak'; 
+             'W21111205'='Aptar';
+             'W21111206'='Lindal';
+              else=NA")) %>% 
+  unite(col = "canister",Canister_Batch, Canister_Id, remove = FALSE) %>% 
+  unite(col = "actuator",Device_Batch_MBA, Device_Id_MBA)
+sp
+source("script/mean_plot.R")
+mean_plot(sp, actuator, Area_mm2, color=valve, lifestage,formulation,valve)
+bxp=qplot(data=filter(sp,Area_mm2 <= 600),
+      x=actuator, y=Area_mm2, geom="boxplot", fill=valve)+
+  facet_nested(~lifestage+formulation+valve)+
+  theme_bw()+theme(axis.text.x = element_text(angle=90,vjust=0.5))
+bxp
+
+sp.filter=sp %>% filter(Area_mm2 <= 600) %>% 
+  select(lifestage,Canister_Batch,formulation,valve,canister,actuator,act, Area_mm2) %>% 
+  convert_as_factor(Canister_Batch,formulation,valve,canister,actuator) %>% 
+  arrange(formulation,valve,canister)
+sp.filter
+summary(sp.filter)
+str(sp.filter)
+sp.filter %>% filter(valve=="Teva") %>% 
+  group_by(lifestage) %>% 
+           anova_test(Area_mm2 ~ formulation*actuator) 
+
+sp.filter %>% filter(formulation=="CF") %>% 
+  group_by(lifestage) %>% 
+  anova_test(Area_mm2 ~ actuator*valve)
+  print_table(file = "outfiles/out.doc")
+
+
+############################### 随机化实验 M
+sp.cf=sp.filter %>% filter(formulation=="CF", lifestage=="M") 
+table(sp.cf$actuator, sp.cf$valve)
+### ANOVA分析
+df.aov=anova_test(data=sp.cf, Area_mm2 ~ actuator*valve)
+df.aov
+get_anova_table(df.aov)
+pwc=sp.cf %>% 
+  group_by(actuator) %>% 
+  emmeans_test(Area_mm2~valve, p.adjust.method = "bonferroni") %>% 
+  filter(p.adj.signif != "ns")
+pwc
+pwc=pwc %>% add_xy_position(x="valve")
+source("script/mean_plot.R")
+mean_plot(sp.cf, valve, color=valve, Area_mm2, actuator)[[2]]+
+  stat_pvalue_manual(pwc)+
+  labs(caption = get_pwc_label(pwc))
+
+df.mean=sp.cf %>%
+  group_by(actuator,valve) %>%
+  get_summary_stats(Area_mm2,type = "mean_sd")
+df.mean
+p=qplot(data=sp.cf, x=valve, y=Area_mm2, geom="boxplot",color=valve)+
+  facet_nested(~ actuator, nest_line = element_line(linetype = 1))+
+  theme_modern(axis.text.angle = 90)+
+  geom_text(data=df.mean, aes(label=paste("n=",{n}), y=-Inf), 
+            size=3, hjust =0.5, vjust=-0.5, color="black")
+p+stat_pvalue_manual(pwc)+
+  labs(caption = get_pwc_label(pwc))
+#可视化交互作用
+HH::interaction2wt(data=sp.cf, Area_mm2 ~ actuator*valve,
+                   par.strip.text=list(cex=.7))
+library(bruceR)
+fit=MANOVA(data=sp.cf, dv="Area_mm2", between = c("actuator","valve"))
+EMMEANS(fit, "valve", by="actuator")
+emmip(fit,valve~actuator, CIs=TRUE)+ggplot2::theme_light()
+
+library(afex)
+# sp2.cf$ID=1:nrow(sp2.cf)
+sp.cf=sp.cf %>% rowid_to_column("id") %>% convert_as_factor(id)
+str(sp.cf)
+fit2=aov_car(data=sp.cf, Area_mm2 ~ actuator*valve+Error(id))
+summary(fit2)
+emmeans(fit2, pairwise ~ valve|actuator)
+afex::afex_plot(fit2, ~actuator, ~valve,  mapping = "color")+
+  theme_lucid(axis.text.angle = 0)
+
+###############全部分析
+sp.sum=sp %>% filter(Area_mm2 <= 600) %>% 
+  group_by(canister, actuator, lifestage) %>% 
+  get_summary_stats(Area_mm2,type = "mean_sd") 
+sp.sum
+rld.line=sp.sum %>% 
+  mutate(m1=mean*0.9, m2=mean*1.1) %>%
+  filter(canister %in% c("AFS62A_001002",
+                         "AFS62A_038384",
+                         "AFS62A_090138"))
+rld.line
+rld.ratio=sp.sum %>%
+  group_by(actuator,lifestage) %>% 
+  mutate(first.area=first(mean, order_by = canister),
+         ratio=map2_dbl(mean, first.area, ~.x/.y))
+rld.ratio
+###ggplot2
+ggplot(data=sp %>% filter(Area_mm2 <= 600), aes(x=canister,y=Area_mm2))+
+  facet_nested(~lifestage+actuator)+  #, labeller = "label_both"
+  stat_boxplot(geom = "errorbar",width=0.5)+ 
+  geom_boxplot(aes(color=valve), outlier.shape = 8)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=90,vjust=0.5))+
+  stat_summary(fun = mean, geom = "point",color = "black")+
+  geom_text(data=rld.ratio, 
+            aes(label=scales::percent(round(ratio,2)),y=-Inf),
+            hjust =0.6,vjust=-1,size=2,
+            color=if_else(rld.ratio$ratio<0.9,"Red","Black"))+
+  geom_hline(data=rld.line, aes(yintercept = mean), linetype="dashed")+
+  geom_hline(data=rld.line, aes(yintercept = m1), colour="red")+
+  geom_hline(data=rld.line, aes(yintercept = m2), colour="red")+
+  theme(legend.position = "top")
+
+##########################################################################
+sp %>%
+  group_by(canister, actuator, lifestage) %>%
+  get_summary_stats(Area_mm2,type = "mean_sd")
+## across
+sp.mean=sp %>%
+  group_by(Canister_Batch) %>%
+  summarise(
+    n=dplyr::n(),
+    across(c(Area_mm2,Ovality), list(Mean = mean, SD = sd), na.rm = TRUE,
+           .names = "{stringr::str_remove(.col, '_mm2')}_{.fn}" ),
+    .groups="drop"  #  keep  rowwise
+  )
+sp.mean
+############################################################
+pg<- read_excel("rawdata/GW012-valve-select.xlsx",sheet="pg")
+pg
+summary(pg)
+#################
+pg=pg %>% drop_na() %>%
+  mutate(
+    lifestage=RECODE(act,"lo:56='B'; 90:hi='M'; else=NA"),
+    test.date=lubridate::as_date(Actuation_Date),
+    formulation=map_chr(Canister_Batch, ~if_else(str_sub(.x,1,1)=="A","RLD","CF")),
+    valve=RECODE(Canister_Batch,
+                 "c('AFS62A','W21111203')='Teva'; 
+             'W21111204'='Bespak'; 
+             'W21111205'='Aptar';
+             'W21111206'='Lindal';
+              else=NA")) %>% 
+  unite(col = "canister",Canister_Batch, Canister_Id, remove = FALSE) %>% 
+  unite(col = "actuator",Device_Batch_MBA, Device_Id_MBA)
+pg
+bxp=qplot(data=pg,x=actuator, y=Plume_Angle_deg, geom="boxplot", fill=valve)+
+  facet_nested(~lifestage+formulation+valve)+
+  theme_bw()+theme(axis.text.x = element_text(angle=90,vjust=0.5))
+bxp
+pg %>% filter(valve=="Teva") %>% 
+  group_by(lifestage) %>% 
+  anova_test(Plume_Angle_deg ~ formulation*actuator) 
+
+pg %>% filter(formulation=="CF") %>% 
+  group_by(lifestage) %>% 
+  anova_test(Plume_Angle_deg ~ actuator*valve)
+
+#########################################随机化
+pg2=pg %>% filter(lifestage == "M") %>% 
+  select(formulation,valve,canister,actuator,act,
+         Plume_Angle_deg,Plume_Width_mm, test.date) %>% 
+  convert_as_factor(formulation,valve,canister,actuator) %>% 
+  arrange(formulation,valve,canister)
+
+pg2 %>% mutate(across(formulation:test.date, ~as.numeric(.x))) %>% 
+  cor_mat() %>%
+  cor_reorder() %>% pull_lower_triangle() %>% cor_plot(label = TRUE)
+
+#散点图
+qplot(data=pg2,x=act,y=Plume_Angle_deg, color=factor(test.date))+
+  # facet_nested(actuator~formulation+valve)+
+  theme_bw()
+df.mean=pg2 %>% group_by(formulation, actuator,valve) %>% 
+  get_summary_stats(c(Plume_Angle_deg,Plume_Width_mm), type="mean_sd")
+df.mean
+#boxplot
+p1=qplot(data=pg2, x=valve, y=Plume_Angle_deg, geom="boxplot",color=valve)+
+  facet_nested(~ formulation+actuator, nest_line = element_line(linetype = 1))+
+  theme_modern(axis.text.angle = 90)+
+  geom_text(data=df.mean, aes(label=paste("n=",{n}), y=-Inf), 
+            size=3, hjust =0.5, vjust=-0.5, color="black")
+p1
+p2=qplot(data=pg2, x=valve, y=Plume_Width_mm, geom="boxplot",color=valve)+
+  facet_nested(~ formulation+actuator, nest_line = element_line(linetype = 1))+
+  theme_modern(axis.text.angle = 90)+
+  geom_text(data=df.mean, aes(label=paste("n=",{n}), y=-Inf), 
+            size=3, hjust =0.5, vjust=-0.5, color="black")
+plot_grid(p1,p2, ncol = 1)
+#ANOVA
+table(filter(pg2, valve=="Teva")$formulation,
+      filter(pg2, valve=="Teva")$actuator)
+pg2 %>% filter(valve=="Teva") %>% 
+  anova_test(Plume_Width_mm ~ formulation*actuator)
+pg2 %>% filter(valve=="Teva") %>% 
+  anova_test(Plume_Angle_deg ~ formulation*actuator)
+HH::interaction2wt(data=pg2 %>% filter(valve=="Teva"),
+                   Plume_Width_mm ~ formulation*actuator,
+                   par.strip.text=list(cex=.55))
+#CF
+pg2.cf=pg2 %>% filter(formulation=="CF") 
+table(pg2.cf$valve, pg2.cf$actuator)
+anova_test(data=pg2.cf, Plume_Angle_deg ~ actuator*valve)
+anova_test(data=pg2.cf, Plume_Width_mm ~ actuator*valve)
+HH::interaction2wt(data=pg2.cf, Plume_Width_mm ~ actuator*valve,
+                   par.strip.text=list(cex=.55))
+# log
+pgcf.log=pg2.cf %>% mutate(logAngle=log(Plume_Angle_deg),
+                  logWidth=log(Plume_Width_mm)) 
+# Mean plot
+pgcf.log %>% group_by(actuator, valve) %>% 
+  get_summary_stats(c(logAngle,logWidth), type="mean_sd") %>% 
+  ggplot(aes(x=valve, y=mean, color=actuator))+
+  geom_errorbar(aes(ymin = mean-sd, ymax = mean+sd), width = 0.2)+
+  facet_nested(~variable+actuator, nest_line = element_line(linetype = 1))+
+  geom_point()+
+  theme_modern(axis.text.angle = 90)
+#ANOVA
+anova_test(data=pgcf.log, logAngle ~ actuator*valve)
+anova_test(data=pgcf.log, logWidth ~ actuator*valve)
+
+fit.aov=pg2.cf %>% rowid_to_column("id") %>% convert_as_factor(id) %>% 
+  aov_car(data=., Plume_Width_mm ~ actuator*valve+Error(id))
+summary(fit.aov)
+emmip(fit.aov, valve ~ actuator)
+afex_plot(fit.aov, ~valve, ~actuator, mapping = "color")+theme_lucid()
+
+################################################################
+ddu<- read_excel("rawdata/GW012-valve-select.xlsx",sheet="ddu")
+ddu$act = as.numeric(ddu$act)
+ddu
+source("script/mean_plot.R")
+# x=act  act为数值型变量
+mean_plot(ddu, act, DD_μg, color =Canister_Batch)[[2]]+
+  facet_nested(~Canister_Batch + Canister_Id)+
+  scale_x_continuous(limits = c(0,120),breaks = seq(0,120,by=30))+
+  stat_smooth(method = lm, formula =y~x , se = FALSE,
+              linetype="dashed",alpha = 0.1)+
+  geom_hline(aes(yintercept=60), colour="red") +  #75~125%
+  geom_hline(aes(yintercept=100), colour="red")+  
+  geom_hline(aes(yintercept=64), colour="red", linetype="dashed") +  #80~120%
+  geom_hline(aes(yintercept=96), colour="red", linetype="dashed")
+
+ddu.life=ddu %>% 
+  mutate(
+    lifestage=RECODE(act,"lo:59='B'; 60:115='M'; 116:hi='E'; else=NA"),
+    formulation=map_chr(Canister_Batch, ~if_else(str_sub(.x,1,1)=="A","RLD","CF")),
+    valve=RECODE(Canister_Batch,
+                 "c('AFS62A','W21111203')='Teva'; 
+                 'W21111204'='Bespak'; 
+                 'W21111205'='Aptar';
+                'W21111206'='Lindal'; else=NA")) %>% 
+  unite(col = "canister",Canister_Batch, Canister_Id, remove = FALSE) %>% 
+  unite(col = "actuator",Device_Batch_MBA, Device_Id_MBA)
+ddu.life
+# library(ggh4x)
+ggplot(ddu.life, aes(x=act,y=DD_μg, color=actuator))+
+  facet_nested(~formulation+valve, labeller = "label_both")+
+  geom_point()+
+  stat_smooth(method = lm, formula =y~x , se = FALSE,
+              linetype="dashed",alpha = 0.5, size=0.5)+
+  scale_x_continuous(limits = c(0,120), breaks = seq(0,120,by=60))+
+  geom_hline(yintercept=60, colour="red")+
+  geom_hline(yintercept=100, colour="red")+
+  theme_bw()
+
+df.lm=ddu.life %>%
+  df_nest_by(formulation, valve, actuator) %>% 
+  mutate(model=map(data,~lm(DD_μg~lifestage, data=.x)))
+df.lm %>% mutate(
+              rmse=map2_dbl(model, data, modelr::rmse),
+              r2=map2_dbl(model, data, modelr::rsquare),
+              slope=map_dbl(model, ~coef(.x)[[2]]),
+              p.val=map_dbl(model, ~broom::glance(.x)$p.value) %>%
+                           p_format(digits = 2) %>% p_mark_significant()) %>% 
+  select(formulation, valve, actuator, r2, slope, p.val) 
+  print_table(file="outfile.doc")
+#均值偏差（B、E）
+ddu.life %>% filter(lifestage %in% c("B","E")) %>% 
+    group_by(canister,actuator,lifestage) %>% 
+    get_summary_stats(DD_μg, type = "mean_sd") %>% 
+    group_by(canister) %>% 
+    mutate(lead_mean=lead(mean),    #lag 
+    diff_mean=map2_dbl(mean,lead_mean, ~.y-.x)) %>% 
+    drop_na() %>% select(canister,actuator,diff_mean)
+
+############################################################################
+library(openxlsx)
+apsd<- read.xlsx("rawdata/GW012-valve-select.xlsx",sheet="apsd",
+                colNames = FALSE,rowNames = TRUE)
+apsd= data.frame(t(apsd)) %>% as_tibble()
+# glimpse(apsd)
+# colnames(apsd)
+apsd= apsd %>% mutate(across(6:27,~as.numeric(.x))) 
+apsd
+# apsd_ISM=apsd %>% rowwise() %>% mutate(ISM=sum(across(11:17)))  # stage2-Filter
+# apsd_ISM
+apsd.life=apsd %>% 
+  mutate(
+    lifestage=RECODE(Last_act,"10='B'; 69='M'; 115='E'; else=NA"),
+    formulation=map_chr(Canister_Batch, ~if_else(str_sub(.x,1,1)=="A","RLD","CF")),
+    valve=RECODE(Canister_Batch,
+                 "c('AFS62A','W21111203')='Teva'; 
+                 'W21111204'='Bespak'; 
+                 'W21111205'='Aptar';
+                'W21111206'='Lindal'; else=NA")) %>% 
+  unite(col = "canister",Canister_Batch, Canister_Id, remove = FALSE) %>% 
+  unite(col = "actuator",Device_Batch_MBA, Device_Id_MBA)
+apsd.life 
+
+apsd.sum=apsd.life %>% 
+  select(canister, actuator, lifestage, formulation, valve,
+         Mass_Balance, FPD_μg, FPF_percent, MMAD_μm, GSD) %>% 
+  pivot_longer(c(FPD_μg, FPF_percent, MMAD_μm, GSD, Mass_Balance),
+               names_to ="usp", values_to = "value") %>% 
+  mutate(usp=fct_relevel(usp, 
+                         c("FPD_μg","FPF_percent","MMAD_μm","GSD","Mass_Balance")),
+         lifestage=fct_relevel(lifestage, c("B","M","E"))) 
+apsd.sum
+apsd.sum %>% 
+  group_by(formulation, valve, usp) %>% 
+  filter(usp %in% c("FPD_μg","FPF_percent","MMAD_μm","GSD")) %>% 
+  get_summary_stats(value, type="mean_sd")
+  print_table(file = "outfiles/out.doc")
+
+ggplot(apsd.sum, aes(x=lifestage, y = value)) +
+  facet_nested(usp ~ formulation+valve, scales = "free", margins=FALSE)+
+  geom_point(aes(shape=actuator))+
+  geom_line(aes(group=actuator, color=actuator))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=0,vjust=0.5))
+
+df.cf=apsd.sum %>% 
+  filter(formulation=="CF", usp=="MMAD_μm") %>%  
+  convert_as_factor(valve,actuator,canister,lifestage)
+df.cf
+anova_test(data=df.cf, value~valve*actuator+lifestage)  
+  get_anova_table(correction="GG")
+df_group_by(df.cf,lifestage) %>% emmeans_test(value~valve)
+
+
+fit=afex::aov_car(data=df.cf, value~valve+Error(canister/lifestage))
+summary(fit)
+afex::afex_plot(fit, ~lifestage|valve)
+
+df.cf %>% group_by(actuator) %>% 
+ emmeans_test(value~valve) %>% 
+  filter(p.adj.signif !="ns")
+  # get_emmeans()
+
+#############
+apsd.sum %>% pivot_wider(names_from = lifestage, values_from=value) %>% 
+  filter(usp=="MMAD_μm", formulation=="CF") %>% 
+  select(valve,actuator,B,M,E) %>% rowid_to_column("id") %>%
+  convert_as_factor(id) %>% 
+  pivot_longer(c(B,M,E), names_to ="lifestage", values_to = "MMAD")
+
+
+########分布图
+library(ggpubr)  # mean_sd
+colnames(apsd.life)
+apsd.life %>%
+  pivot_longer(cols =8:17, names_to ="depositions", values_to = "amount") %>% 
+  mutate(depositions=fct_relevel(depositions,
+        c("Throat","Stage0","Stage1","Stage2","Stage3",
+        "Stage4","Stage5","Stage6","Stage7","Filter")),
+        lifestage=fct_relevel(lifestage, c("B","M","E"))) %>%  
+ggplot(aes(x=depositions, y=amount))+
+  facet_nested(lifestage~ formulation+valve)+
+  geom_point(aes(shape=actuator))+ #position = position_dodge(0.8)
+  geom_line(aes(color=actuator, group=canister))+
+  scale_y_continuous(breaks = seq(0,50,5))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=90, vjust=0.5))
+
+############################################################################
+shotweight<- read_excel("rawdata/GW012-valve-select.xlsx",sheet="weight") 
+shotweight
+shotweight$act = as.numeric(shotweight$act)
+sw.life=shotweight %>% 
+  mutate(
+    lifestage=RECODE(act,"lo:59='B'; 60:115='M'; 116:hi='E'; else=NA"),
+    formulation=map_chr(Canister_Batch, ~if_else(str_sub(.x,1,1)=="A","RLD","CF")),
+    valve=RECODE(Canister_Batch,
+                 "c('AFS62A','W21111203')='Teva'; 
+                 'W21111204'='Bespak'; 
+                 'W21111205'='Aptar';
+                'W21111206'='Lindal'; else=NA")) %>% 
+  unite(col = "canister",Canister_Batch, Canister_Id, remove = FALSE) %>% 
+  unite(col = "actuator",Device_Batch_MBA, Device_Id_MBA)
+source("script/mean_plot.R")
+# x=act  act为数值型变量
+mean_plot(sw.life, act, shot_weight_mg, color =actuator)[[2]]+
+  facet_nested(testing~formulation+valve, scales="free_y")+
+  geom_hline(aes(yintercept=53.1), colour="red") +  #90~110% 59
+  geom_hline(aes(yintercept=64.9), colour="red")
+
+
+################################################################
+#协方差分析
+data("stress", package = "datarium")
+stress %>% sample_n_by(treatment, exercise)
+ggscatter(stress, x = "age", y = "score")+
+  facet_nested(~treatment+exercise)+
+  stat_smooth(method = "lm", span = 0.9)+
+  theme_bw()
+stress %>%
+  unite(col = "group", treatment, exercise) %>%
+  anova_test(score ~ group*age)
+
+
+# 协方差 factorize=FALSE
+d.c = group_mean_center(stress, "age", by="exercise", add.suffix="_c")
+d.c
+
+fit=aov_car(data=d.c, score~treatment*exercise+age_c+Error(id), factorize=FALSE)
+summary(fit)
+
+res.aov=stress %>% 
+  anova_test(score ~ age + treatment*exercise) 
+get_anova_table(res.aov)
+# Pairwise comparisons
+pwc <- stress %>% 
+  group_by(exercise) %>%
+  emmeans_test(
+    score ~ treatment, covariate = age,
+    p.adjust.method = "bonferroni"
+  )
+pwc
+# Line plot
+lp <- ggline(
+  get_emmeans(pwc), x = "exercise", y = "emmean", 
+  color = "treatment", palette = "jco"
+) +
+  geom_errorbar(
+    aes(ymin = conf.low, ymax = conf.high, color = treatment), 
+    width = 0.1
+  )
+lp
+# Comparisons between treatment group at each exercise level
+pwc <- pwc %>% add_xy_position(x = "exercise", fun = "mean_se", step.increase = 0.2)
+lp + 
+  stat_pvalue_manual(
+    pwc, hide.ns = TRUE, tip.length = 0,
+    bracket.size = 0
+  ) +
+  labs(
+    subtitle = get_test_label(res.aov,  detailed = TRUE),
+    caption = get_pwc_label(pwc)
+  )
+# Fit the model, the covariate goes first
+model <- lm(score ~ age + treatment*exercise, data = stress)
+summary(model)
+anova(model) #显著性
+broom::tidy(model) 
+broom::glance(model) 
+broom::augment(model) %>% pluck(".resid") %>% shapiro_test()
+broom::augment(model) %>% levene_test(.resid ~ treatment*exercise)
+broom::augment(model) %>% filter(abs(.std.resid) > 3) 
+
+# 混合设计
+data("performance", package = "datarium")
+performance # t 组内因素
+fit=MANOVA(data = performance, dvs="t1:t2", dvs.pattern="t(.)", 
+           subID ="id", within = "time", between = c("gender", "stress"))
+afex::afex_plot(fit, "time", "gender")
+#####################################################################3
+df <- performance %>%
+  pivot_longer(t1:t2, names_to = "time", values_to = "score") %>%
+  convert_as_factor(id, time)
+df
+df %>%
+  group_by(gender, stress, time ) %>%
+  get_summary_stats(score, type = "mean_sd")
+bxp=qplot(data=df, x = time, y = score,
+          geom="boxplot")+facet_nested(~gender+stress)
+bxp
+res.aov <- anova_test(data =df, score~gender*stress+Error(id/time))
+#####球形假设校正 重复测量
+res.aov
+get_anova_table(res.aov)
+HH::interaction2wt(data=df, score~gender*stress*time,
+                   par.strip.text=list(cex=.7))
+pwc=df %>%
+  group_by(gender, stress) %>%
+  emmeans_test(score ~ time)
+pwc
+get_emmeans(pwc)
+pwc <- pwc %>% add_xy_position(x = "time")
+bxp + stat_pvalue_manual(pwc, hide.ns = TRUE, tip.length = 0)
+
+df %>%
+  group_by(gender, stress, time) %>%
+  identify_outliers(score)
+df %>%
+  group_by(gender, stress, time ) %>%
+  shapiro_test(score)
+
+shapiro_test(data=df_group_by(df, gender, stress, time), score)
+
+ggqqplot(df, "score", ggtheme = theme_bw()) +
+  facet_grid(time ~ stress, labeller = "label_both")
+
+df %>%
+  group_by(time) %>%
+  levene_test(score ~ gender*stress)
+####
+fit <- aov_car(data =df, score~gender*stress+Error(id/time))
+summary(fit)
+afex_plot(fit, ~gender,~stress, mapping ="color")
+##################################################################
+df.aov=MANOVA(data = performance, dv = "score", subID ="id",
+         within = "time", between = c("gender", "stress"))  #sph.correction="GG"
+EMMEANS(df.aov, "time", by="gender")
+EMMEANS(df.aov, "time", by="stress")
+emmip(df.aov, time~gender|stress)
+afex::afex_plot(df.aov, "time", "gender")
+
+mixed.3_1b2w
+MANOVA(data=mixed.3_1b2w, dvs="B1C1:B2C2", dvs.pattern="B(.)C(.)",
+       between="A", within=c("B", "C")) %>%
+  EMMEANS("A", by="B") %>%
+  EMMEANS(c("A", "B"), by="C") %>%
+  EMMEANS("A", by=c("B", "C"))
+
+######################################################################3
+library(afex)
+fit=afex::aov_car(data = performance,score~gender*stress+Error(id/time))
+fit
+summary(fit)
+emmeans(fit,  pairwise ~stress|time/gender)
+# afex::afex_plot(fit,"stress","gender","time")
+afex::afex_plot(fit, ~stress, ~gender)
+
+# mixed
+data("Machines", package = "MEMSS")
+Machines
+m1 <- afex::mixed(score ~ Machine + (Machine|Worker), data=Machines)
+m1
+summary(m1)
+anova(m1)
+pairs(emmeans::emmeans(m1, "Machine"))
+pairs(emmeans::emmeans(m1, ~Machine))
+afex_plot(m1, "Machine")
+
+library(lmerTest)
+library(lme4)
+m2 = lmer(score ~ Machine + (1+Machine|Worker), data=Machines)
+summary(m2)
+anova(m2)
+
+data(obk.long, package = "afex")
+obk.long
+fit=aov_car(value ~ treatment * gender + Error(id/(phase*hour)), 
+        data = obk.long)
+summary(fit)
+##################################################
+library(afex)
+N.2=10 #sample size of age 
+N.3=20 #sample size of reading platform
+Comprehension.Data <- data.frame( 
+  Subject = seq(1,N.3*3), 
+  Platform = c(rep("Paper", N.3), rep("Kindle", N.3), rep("Computer", N.3)), 
+  Age = rep(c(rep("Old",N.2), rep("Young", N.2)),3), 
+  Comprehension = c(rnorm(N.2,10,.5),rnorm(N.2,8,.5), 
+                    rnorm(N.2,6,.5),rnorm(N.2,7,.5),
+                    rnorm(N.2,2,.5),rnorm(N.2,6,.5))) 
+options('contrasts')
+# options(contrasts=c('contr.sum','contr.poly'))
+# options(contrasts=c('contr.treatment','contr.poly'))
+Comprehension.Data %>% 
+anova_test(Comprehension ~ Platform*Age, type=3)
+
+Model.aov.2<-aov_car(Comprehension ~ Platform*Age + Error(Subject), 
+                     data=Comprehension.Data, observed = "Age")
+summary(Model.aov.2) #Defaults to type III Sum of Squares
+Model.aov.3<-aov_car(Comprehension ~ Platform*Age + Error(Subject), 
+                     data=Comprehension.Data,
+                     anova_table = list(es = "pes"))
+summary(Model.aov.3)
+Model.aov.4<-aov_car(Comprehension ~ Platform*Age + Error(Subject), 
+                     data=Comprehension.Data,
+                     anova_table = list(es = "pes"),
+                     return="univariate")
+Model.aov.4
+emmeans(Model.aov.2, pairwise ~ Platform)
+emmeans(Model.aov.2, pairwise ~ Age|Platform) 
+#between实验
+data("jobsatisfaction", package = "datarium")
+jobsatisfaction %>% anova_test(score ~ gender * education_level, type=3)
+
+fit=aov_car(score ~ gender * education_level + Error(id), 
+                     data=jobsatisfaction)
+summary(fit)
+#withim 
+data(md_12.1)
+view(md_12.1)
+str(md_12.1)
+table(md_12.1$noise, md_12.1$angle)
+fit2=aov_car(rt ~ Error(id/(noise*angle)), data=md_12.1)
+summary(fit2)
+
+###混合实验
+data(obk.long, package = "afex")
+fit3<- aov_car(value ~ treatment * gender + Error(id/(phase*hour)), 
+                     data = obk.long)
+summary(fit3)
+obk.long %>% anova_test(value ~ treatment * gender + Error(id/(phase*hour)))
+
+#ANCOVA: adding a covariate (necessary to set factorize = FALSE)
+fit4=aov_car(value ~ treatment * gender + age + Error(id/(phase*hour)), 
+         factorize = FALSE, data = obk.long, observed = c("gender", "age"))
+summary(fit4)
+performance::check_sphericity(fit4) #球形度的假设
+
+ins <- data.frame(
+  n = c(500, 1200, 100, 400, 500, 300),
+  size = factor(rep(1:3,2), labels = c("S","M","L")),
+  age = factor(rep(1:2, each = 3)),
+  claims = c(42, 37, 1, 101, 73, 14))
+offset(log(ins$n))
+ins.glm <- glm(claims ~ size + age + offset(log(n)), 
+               data = ins, family = "poisson")
+summary(ins.glm)
+afex_plot(ins.glm, "size", "age")
+
+
+data(Oats, package = "nlme")
+Oats$nitro <- factor(Oats$nitro)
+oats.1 <- nlme::lme(yield ~ nitro * Variety, 
+                    random = ~ 1 | Block / Variety,
+                    data = Oats)
+plot_grid(
+  afex_plot(oats.1, "nitro", "Variety", data = Oats), # A
+  afex_plot(oats.1, "nitro", "Variety", data = Oats), # B
+  afex_plot(oats.1, "nitro", "Variety", data = Oats, id = "Block"), # C
+  afex_plot(oats.1, "nitro", data = Oats), # D
+  afex_plot(oats.1, "nitro", data = Oats, id = c("Block", "Variety")), # E
+  afex_plot(oats.1, "nitro", data = Oats, id = "Block"), # F
+  labels = "AUTO"
+)
+layout(matrix(c(1,2,3,4),2,2)) 
+plot(Gobble.model.2)
+
+
+
+############
+data("ToothGrowth")
+df <- tibble(ToothGrowth) %>% mutate(dose=factor(dose))
+df
+df %>% anova_test(len ~ supp*dose)
+df2=df %>% mutate(id=rep(1:10,6)) 
+df2 %>% 
+  anova_test(len ~ supp*dose + Error(id/(supp*dose)))
+
+data("sleepstudy", package="lme4")
+m <- lmer(Reaction ~ Days + (Days | Subject), sleepstudy)
+summary(m)
+
+m1=mixed(Reaction ~ Days + (Days | Subject), sleepstudy)
+m1
+summary(m1)
+emmeans(m1, pairwise ~ Days)
+data("Machines", package = "MEMSS")
+m2 <- mixed(score ~ Machine + (Machine|Worker), data=Machines)
+m2
+emmeans::emmeans(m2, ~Machine)
+afex_plot(m2, "Machine")
+afex_plot(m2, ~Machine)
+
+
+library(GGally)
+ggpairs(iris)
+
+data(sk2011.1)
+str(sk2011.1)
+a1=aov_car(response ~ instruction + Error(id/inference*plausibility), sk2011.1)
+a1
+m1 <- emmeans(a1, ~ inference)
+m1
+pairs(m1)
+m2 <- emmeans(a1, "inference", by = "instruction")
+## equal: emmeans(a1, ~ inference|instruction)
+m2
+afex_plot(a1, x = "inference", trace = "instruction", panel = "plausibility",
+          error = "none")
+p1 <- afex_plot(a1, x = "inference", trace = "instruction", 
+                panel = "plausibility", error = "none", 
+                mapping = c("color", "fill"), 
+                data_geom = geom_boxplot, data_arg = list(width = 0.4), 
+                point_arg = list(size = 1.5), line_arg = list(size = 1))
+p1
+
+data(obk.long, package = "afex")
+mixed(value ~ treatment*phase*hour + (1|id), obk.long)
+
+#########################################################333
+data("ToothGrowth")
+df <- ToothGrowth
+head(df)
+x=df %>% df_unite(col = "dose_supp", dose, supp) %>% 
+    df_nest_by(dose_supp)
+x
+df_select(x, dose_supp)
+ToothGrowth %>%
+  df_get_var_names(dose, len)
+
+df$id <- rep(1:10, 6) # Add individuals id
+head(df)
+MANOVA(data=df, subID="id", dv="len", within = df_get_var_names(df, dose, supp))
+# df_get_var_names(df, dose, supp)
+# c("dose", "supp")
+
+design <- factorial_design(df, dv = len, wid = id, within = c(supp, dose))
+design
+df$id <- 1:nrow(df)
+design2 <- factorial_design(df, dv = len, wid = id, between = c(supp, dose))
+design2
+
+
